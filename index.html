@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <title>QR Code Scanner</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+      html,
+      body {
+        padding: 0;
+        margin: 0;
+        font-family: Arial, Helvetica, sans-serif;
+      }
+      .wrapper {
+        padding: 0 4rem;
+		width: 640px;
+		text-align: center;
+		margin: 0 auto;
+      }
+      #canvas {
+        position: absolute;
+      }
+      #scanned {
+        display: flex;
+        flex-direction: column;
+        gap:1rem;
+      }
+      #video-wrapper {
+        height: 480px;
+        position: relative;
+        border-radius: 10px;
+        overflow: hidden;
+      }
+    </style>
+	<script>
+        function changeMode(event) {
+			if (event === 'infinite') {
+				document.getElementById('scan-id-mode').disabled = false
+				document.getElementById('scan-id-mode').value = 'id-as-a-prefix'
+			} else {
+				document.getElementById('scan-id-mode').disabled = true
+				document.getElementById('scan-id-mode').value = 'all'
+			}
+		}
+	</script>
+  </head>
+  <body>
+    <template id="scaned-item">
+      <style>
+        .wrapper {
+          --gradient-start: #c471ed;
+          --gradient-end: #f7797d;
+          border: none;
+          border-radius: 1rem;
+          padding: 1rem;
+          background: linear-gradient(var(--gradient-start), var(--gradient-end));
+          box-shadow: 0 3px -3px 10px #000;
+        }
+        .wrapper span {
+          font-family: Arial, Helvetica, sans-serif;
+          color: white;
+          display: block;
+        }
+      </style>
+      <div class="wrapper" style="text-align: left;">
+        <span><b>Value: </b><slot name="raw"></slot></span>
+        <span><b>Format: </b><slot name="format"></slot></span>
+      </div>
+    </template>
+
+	<div style="position: absolute; z-index: 10; padding-left: 20px;">
+		<div style="flex">
+			<span><b>Mode:</b> </span>
+			<span>
+				<select id="scan-mode" onchange="changeMode(this.value)">
+					<option value="once">Scan Once</option>
+					<option value="infinite">Scan Infinitely</option>
+				</select>
+			</span>
+		</div>
+		<div>
+			<span><b>Identity Mode: </b></span>
+			<span>
+				<select id="scan-id-mode" disabled="true">
+					<option value="all">All</option>
+					<option value="id-as-a-prefix">Id As A Prefix</option>
+				</select>
+			</span>
+		</div>
+		<div>
+			<span><b>Debug Mode: </b></span>
+			<span>
+				<select id="debug-mode">
+					<option value="false">False</option>
+					<option value="true">True</option>
+				</select>
+			</span>
+		</div>
+	</div>
+
+    <div class="wrapper">
+      <h1>QR Code Scanner</h1>
+      <div>
+        <div id="video-wrapper">
+          <canvas id="canvas" width="640" height="480"></canvas>
+          <video id="video" width="640" height="480" autoplay controls="true"></video>
+        </div>
+        <div>
+          <h1>Recently Scanned</h1>
+          <div id="scanned"></div>
+        </div>
+      </div>
+    </div>
+    <script async>
+        function isOnceMode() {
+        	return document.getElementById('scan-mode').value === 'once';
+        }
+        function isCachingAll() {
+        	return document.getElementById('scan-id-mode').value === 'all';
+        }
+        function isDebugMode() {
+        	return document.getElementById('debug-mode').value === 'true';
+        }
+        
+        function sleep(milliseconds) {
+        	return new Promise((resolve) => {
+        		setTimeout(()=>{
+        			resolve('Okay')
+        		}, milliseconds)
+        	});
+        }
+        
+        if (!('BarcodeDetector' in window)) { 
+        	/* Handle not compatible */ 
+        	alert("Your browser does not support BarcodeDetector!")
+        } else {
+        	let codes = [];
+        	const seen = new Set();
+        	const checkAndPutSeen = (value) => {
+        		// Code in seen set then exit loop
+        		let cachingValue = value
+        		if (!isCachingAll()) {
+        			if (cachingValue.match(/\d+:/)) {
+        				cachingValue=cachingValue.substring(0, cachingValue.indexOf(':'))
+        			}
+        		}
+        
+        		if (seen.has(cachingValue)) {
+        			return false;
+        		} else {
+        			seen.add(cachingValue)
+        			return true;
+        		}
+        	}
+        
+        	// Create new barcode detector
+        	const barcodeDetector = new BarcodeDetector({ formats: ['qr_code'] });
+        	
+        	// Define custom element
+        	customElements.define('scaned-item', class extends HTMLElement {
+        	  constructor() {
+        	    super();
+        	    const template = document.querySelector('#scaned-item').content;
+        	    const shadowRoot = this.attachShadow({mode: 'open'}).appendChild(template.cloneNode(true));
+        	  };
+        	});
+        
+        	// Codes proxy/state
+        	const codesProxy = new Proxy(codes, {
+        	  set (target, prop, value, receiver) {
+        	    // Throw err if value is a number
+        	    // Stops from saving undefined codes
+        	    if (typeof value === 'number') throw value;
+        
+        	    target.push(value);
+        	
+        	    // Check if code has already been scanned
+        	    target = target.filter((c) => {
+        	      if (c.rawValue !== window.barcodeVal) return c;
+        	      const d = checkAndPutSeen(c.rawValue)
+        	      return !d;
+        	    })
+        	    
+        	    // Select the container scanned
+        	    const scanned = document.querySelector('#scanned')
+        	    const temp = document.createElement('scaned-item')
+        	    const format = document.createElement('span')
+        	    const rawValue = document.createElement('span')
+        	
+        	    // Goes into the custom elements formate slot
+        	    format.setAttribute('slot', 'format');
+        	    format.innerHTML = value.format;
+        	    
+        	    // Goes into the custom elements raw slot 
+        	    rawValue.setAttribute('slot', 'raw');
+        		if (isCachingAll()){
+        			rawValue.innerHTML = value.rawValue;
+        		} else {
+        			if (value.rawValue.match(/\d+:/)) {
+        				rawValue.innerHTML = value.rawValue.substring(0, value.rawValue.indexOf(':'))
+        			} else {
+        				rawValue.innerHTML = value.rawValue;
+        			}
+        		}
+        	
+        	    // Append elements to custom element
+        	    temp.appendChild(rawValue);
+        	    temp.appendChild(format);
+        	
+        	    // Append Custom element to scanned container
+        	    scanned.appendChild(temp);
+        	    return true;
+        	  }
+        	});
+        	
+        	// Get video element 
+        	const video = document.getElementById('video');
+        	
+        	// Check for a camera
+        	if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+        	  const constraints = {
+        	    video: true,
+        	    audio: false
+        	  };
+        	  
+        	  // Start video stream
+        	  navigator.mediaDevices.getUserMedia(constraints).then(stream => video.srcObject = stream);
+        	}
+        	
+        	// Draw outline to canvas 
+        	/* --NOTE-- 
+        	  Some codes will not out line the whole barcode 
+        	  instead may have a thin line this is because for a lot of 
+        	  barcodes that is all that is needed.
+        	  if you would like to out line the whole code you can have 
+        	  a look at using the boundingBox object instead of 
+        	  the cornerPoints array in this example it is not used 
+        	  but my edit this to make a square around other codes
+        	  that do not get outlined :) 
+        	*/
+        	const drawCodePath = ({cornerPoints}) => {
+        	  const canvas = document.querySelector('#canvas');
+        	  const ctx = canvas.getContext('2d');
+        	  const strokeGradient = ctx.createLinearGradient(0, 0, canvas.scrollWidth, canvas.scrollHeight);
+        	  
+        	  // Exit function and clear canvas if no corner points
+        	  if (!cornerPoints) return ctx.clearRect(0, 0, canvas.width, canvas.height);
+        	
+        	  // Clear canvas for new redraw
+        	  ctx.clearRect(0, 0, canvas.width, canvas.height);
+        	
+        	  // Create new gradient
+        	  strokeGradient.addColorStop('0', '#c471ed');
+        	  strokeGradient.addColorStop('1', '#f7797d');
+        	
+        	  // Define stoke styles
+        	  ctx.strokeStyle = strokeGradient;
+        	  ctx.lineWidth = 4;
+        	
+        	  // Begin draw
+        	  ctx.beginPath();
+        	
+        	  // Draw code outline path
+        	  for (const [i, {x, y}] of cornerPoints.entries()) {
+        	    if (i === 0) {
+        	      // Move x half of the stroke width back 
+        	      // makes the start and end corner line up
+        	      ctx.moveTo(x - ctx.lineWidth/2, y);
+        	      continue;
+        	    }
+        	
+        	    // Draw line from current pos to x, y
+        	    ctx.lineTo(x, y);
+        	
+        	    // Complete square draw to starting position
+        	    if (i === cornerPoints.length-1) ctx.lineTo(cornerPoints[0].x, cornerPoints[0].y);
+        	  }
+        	
+        	  // Make path to stroke
+        	  ctx.stroke();
+        	}
+        	
+        	// Detect code function 
+        	async function detectCode (){
+        		return new Promise(resolve => {
+        			var resolved = false
+        			barcodeDetector.detect(video).then(codes => {
+        			  // If no codes exit function and clear canvas
+        			  if (codes.length === 0) {
+        				  resolve('');
+        				  return drawCodePath({});
+        			  }
+        			
+        			  for (const barcode of codes)  {
+        				if(isDebugMode()) {
+        				  console.log(barcode)
+        				}
+        			    
+        			    // Draw outline
+        			    drawCodePath(barcode);
+        			
+        			    // Code in seen set then exit loop 
+        			    if (!checkAndPutSeen(barcode.rawValue)) {
+        					if (!resolved) {
+        					    resolve('');
+        						resolved = true;
+        					}
+        					return;
+        				}
+        			
+        				if (!resolved) {
+        				    resolve(barcode.rawValue)
+        					resolved = true
+        			    }
+        			
+        			    // Save barcode to window to use later on
+        			    // then push to the codes proxy
+        			    window.barcodeVal = barcode.rawValue;
+        			    codesProxy.push(barcode);
+        			  }
+        			
+        			}).catch(err => {
+        				if (err.message === 'Invalid element or state.') {
+        					resolve('initializing')
+        					alert(`Please ensure you allow the browser to use your camera!`);
+        				} else {
+        					if (isDebugMode()) {
+        						console.error(err);
+        					}
+        				    resolve('');
+        				}
+        			})
+        	    })
+        	}
+        	
+        	async function loop(){
+        		var a = document.createElement("a");
+        		while(true) {
+        			const got = await detectCode()
+        			if (isOnceMode() && got != '' && got != 'initializing') {
+        				video.pause()
+        				break;
+        			}
+        
+        			if (got === 'initializing') {
+        				await sleep(5000)
+        			} else {
+        				if (!isCachingAll() && !isOnceMode()) {
+        					if (got.match(/\d+:/)) {
+        						a.href = window.URL.createObjectURL(new Blob([got], {type: "text/plain"}));
+        						a.download = `${got.substring(0, got.indexOf(':'))}.txt`
+        						a.click();
+        					}
+        				}
+        			
+        				await sleep(100)
+        			}
+        		}
+        	}
+        	
+        	loop()
+        	
+        	// Run detect code function every 100 milliseconds
+        	// setInterval(detectCode, 100);
+        }
+	</script>
+  </body>
+</html>
